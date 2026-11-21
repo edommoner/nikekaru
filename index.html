@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>にけかる</title>
+<style>body{font-family:system-ui,sans-serif;max-width:24rem;margin:12vh auto;padding:1.5rem;background:#101827;color:#eef2ff}h1{font-size:1.6rem}input[type=password]{box-sizing:border-box;width:100%;padding:.8rem;margin:.6rem 0 1rem}button{display:block;margin-top:1.4rem;padding:.6rem 2rem}#status{min-height:2em}</style>
+<h1>にけかる</h1><form id="login"><label>パスワード<input id="password" type="password" autocomplete="current-password" required></label><label><input id="remember" type="checkbox">このブラウザに記憶する</label><button id="open">開く</button></form><p id="status" role="status"></p>
+<script>
+(async () => {
+  const status = document.getElementById('status'), button = document.getElementById('open');
+  if (!globalThis.crypto?.subtle || !('serviceWorker' in navigator)) {
+    status.textContent = 'このブラウザは対応していません。'; button.disabled = true; return;
+  }
+  // Pages serves 404.html at the requested deep URL. Locate the site's root
+  // before loading the shared classic script, including on first-time visits.
+  async function locate() {
+    let base = new URL('./', location.href);
+    for (;;) {
+      try {
+        const response = await fetch(new URL('key.json', base), {cache:'no-store'});
+        const info = await response.json();
+        if (response.ok && info.v === 1 && info.kdf === 'PBKDF2-SHA256') return {base,info};
+      } catch {}
+      const parent = new URL('../', base);
+      if (parent.href === base.href) throw Error('読み込みに失敗しました。');
+      base = parent;
+    }
+  }
+  let ready = locate().then(async result => {
+    await new Promise((resolve,reject) => {
+      const script = document.createElement('script'); script.src = new URL('crypto-core.js', result.base);
+      script.onload = resolve; script.onerror = reject; document.head.append(script);
+    });
+    return result;
+  });
+  ready.catch(() => { status.textContent = '読み込みに失敗しました。'; });
+  document.getElementById('login').onsubmit = async event => {
+    event.preventDefault(); button.disabled = true; status.textContent = '確認中…';
+    try {
+      const {base} = await ready;
+      const info = await (await fetch(new URL('key.json', base), {cache:'no-store'})).json();
+      const field = document.getElementById('password');
+      const key = await SiteCrypto.deriveKey(field.value, info); field.value = '';
+      if (!await SiteCrypto.verifyCheck(key, info)) { status.textContent = 'パスワードが違います。'; return; }
+      await navigator.serviceWorker.register(new URL('sw.js', base), {scope:base.href, updateViaCache:'none'});
+      const remember = document.getElementById('remember').checked;
+      await SiteCrypto.keyRecord(base, 'put', {key,remember,expires:remember ? null : Date.now() + 12*60*60*1000});
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller) await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, {once:true}));
+      location.reload();
+    } catch { status.textContent = '開けませんでした。もう一度お試しください。'; }
+    finally { button.disabled = false; }
+  };
+})();
+</script></html>
